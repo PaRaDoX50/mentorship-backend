@@ -16,12 +16,62 @@ from app.api.email_utils import send_email_verification_message
 from app.api.models.user import *
 from app.api.dao.user import UserDAO
 from app.api.resources.common import auth_header_parser, refresh_auth_header_parser
+from app.database.models.user import UserModel
+from google.oauth2 import id_token
+from google.auth.transport import requests
+import os
 
 users_ns = Namespace("Users", description="Operations related to users")
 add_models_to_namespace(users_ns)
 
 DAO = UserDAO()  # User data access object
 
+def create_tokens_for_new_user_and_return(user):
+    # create tokens and expiry timestamps
+    access_token = create_access_token(identity=user.id)
+    refresh_token = create_refresh_token(identity=user.id)
+
+    from run import application
+    access_expiry = datetime.utcnow() + application.config.get(
+        "JWT_ACCESS_TOKEN_EXPIRES"
+    )
+    refresh_expiry = datetime.utcnow() + application.config.get(
+        "JWT_REFRESH_TOKEN_EXPIRES"
+    )
+
+    # return data
+    return (
+        {
+            "access_token": access_token,
+            "access_expiry": access_expiry.timestamp(),
+            "refresh_token": refresh_token,
+            "refresh_expiry": refresh_expiry.timestamp(),
+        },
+        HTTPStatus.OK,
+    )
+
+def perform_social_sign_in_and_return_response(email:str, provider: str):
+    # get existing user
+    user = DAO.get_user_by_email(email)
+
+    # if user not found, create a new user
+    if not user:
+        data = request.json
+        user = DAO.create_user_using_social_login(data, provider)
+        # If any error occured, return error
+        if not isinstance(user, UserModel):
+            # If variable user is not of type UserModel, then that means it contains the error message and the HTTP code.
+            error_message = user[0]
+            http_code = user[1]
+            return error_message, http_code
+    # if user found, confirm it is for the same social sign in provider
+    else:
+        social_sign_in_details = DAO.get_social_sign_in_details(user.id, provider)
+        # if details not present, return error
+        if not social_sign_in_details:
+            return messages.USER_NOT_SIGNED_IN_WITH_THIS_PROVIDER, HTTPStatus.NOT_FOUND
+
+    return create_tokens_for_new_user_and_return(user)
 
 @users_ns.route("users")
 @users_ns.response(
@@ -423,6 +473,67 @@ class RefreshUser(Resource):
         )
 
 
+@users_ns.route("apple/auth/callback")
+class AppleAuth(Resource):
+    @classmethod
+    @users_ns.doc("apple-auth callback")
+    @users_ns.response(HTTPStatus.OK, "Successful login", login_response_body_model)
+    @users_ns.doc(
+        responses={
+            HTTPStatus.BAD_REQUEST: f"{messages.ANOTHER_USER_FOR_ID_TOKEN_EXISTS}",
+            HTTPStatus.NOT_FOUND: f"{messages.USER_NOT_SIGNED_IN_WITH_THIS_PROVIDER}"
+        }
+    )
+    @users_ns.expect(social_auth_body_model)
+    def post(cls):
+        """
+        Login/Sign-in user using Apple Sign-In.
+
+        The Apple user id (id_token) is recieved which becomes the primary basis for user identification.
+        If not found then that means user is using apple sign-in for first time. In this case, email is checked.
+        If email found, that account is used. Else, a new account is created.
+        """
+
+        email = request.json.get("email")
+
+        return perform_social_sign_in_and_return_response(email, "apple")
+
+@users_ns.route("google/auth/callback")
+class GoogleAuth(Resource):
+    @classmethod
+    @users_ns.doc("google-auth callback")
+    @users_ns.response(HTTPStatus.OK, "Successful login", login_response_body_model)
+    @users_ns.doc(
+        responses={
+            HTTPStatus.UNAUTHORIZED: f"{messages.GOOGLE_AUTH_TOKEN_VERIFICATION_FAILED}",
+            HTTPStatus.BAD_REQUEST: f"{messages.ANOTHER_USER_FOR_ID_TOKEN_EXISTS}",
+            HTTPStatus.NOT_FOUND: f"{messages.USER_NOT_SIGNED_IN_WITH_THIS_PROVIDER}"
+        }
+    )
+    @users_ns.expect(social_auth_body_model)
+    def post(cls):
+        """
+        Login/Sign-in user using Google Sign-In.
+
+        The Google user idToken is received from the client side, which is then verified for its authenticity.
+        On verification, the user is either logged-in or sign-up depending upon wheter it is an existing
+        or a new user.
+        """
+
+        token = request.json.get("id_token")
+        email = request.json.get("email")
+
+        # Verify google auth id token
+        try:
+            idinfo = id_token.verify_oauth2_token(token, requests.Request(), os.getenv("GOOGLE_AUTH_CLIENT_ID"))
+
+            # id_token is valid. Perform social sign in.
+            return perform_social_sign_in_and_return_response(email, "google")
+
+        except ValueError:
+            return messages.GOOGLE_AUTH_TOKEN_VERIFICATION_FAILED, HTTPStatus.UNAUTHORIZED
+
+
 @users_ns.route("login")
 class LoginUser(Resource):
     @classmethod
@@ -471,28 +582,7 @@ class LoginUser(Resource):
                 HTTPStatus.FORBIDDEN,
             )
 
-        access_token = create_access_token(identity=user.id)
-        refresh_token = create_refresh_token(identity=user.id)
-
-        from run import application
-
-        access_expiry = datetime.utcnow() + application.config.get(
-            "JWT_ACCESS_TOKEN_EXPIRES"
-        )
-        refresh_expiry = datetime.utcnow() + application.config.get(
-            "JWT_REFRESH_TOKEN_EXPIRES"
-        )
-
-        return (
-            {
-                "access_token": access_token,
-                "access_expiry": access_expiry.timestamp(),
-                "refresh_token": refresh_token,
-                "refresh_expiry": refresh_expiry.timestamp(),
-            },
-            HTTPStatus.OK,
-        )
-
+        return create_tokens_for_new_user_and_return(user)
 
 @users_ns.route("home")
 @users_ns.doc("home")

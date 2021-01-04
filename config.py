@@ -1,7 +1,6 @@
 import os
 from datetime import timedelta
 
-
 def get_mock_email_config() -> bool:
     MOCK_EMAIL = os.getenv("MOCK_EMAIL")
 

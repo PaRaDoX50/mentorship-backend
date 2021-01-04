@@ -10,6 +10,7 @@ from app.api.dao.mentorship_relation import MentorshipRelationDAO
 from app.api.email_utils import confirm_token
 from app.database.models.mentorship_relation import MentorshipRelationModel
 from app.database.models.user import UserModel
+from app.database.models.social_sign_in import SocialSignInModel
 from app.utils.decorator_utils import email_verification_required
 from app.utils.enum_utils import MentorshipRelationState
 from app.database.models.mentorship_relation import MentorshipRelationModel
@@ -74,6 +75,57 @@ class UserDAO:
         user.save_to_db()
 
         return messages.USER_WAS_CREATED_SUCCESSFULLY, HTTPStatus.CREATED
+
+    @staticmethod
+    def create_user_using_social_login(data: Dict[str, str], social_sign_in_type: str):
+        """
+        Creates a new user using Google Auth.
+
+        Arguments:
+            data: A list containing the user's name and email
+            social_sign_in_type: social sign in provider (apple, google)
+
+        Returns:
+            The new user created
+        """
+
+        id_token = data["id_token"]
+        name = data["name"]
+        username = None
+        password = None
+        email = data["email"]
+        terms_and_conditions_checked = True
+        social_login = True
+
+        # Check if user for this id_token already exists
+        if SocialSignInModel.find_by_id_token(id_token):
+            return messages.ANOTHER_USER_FOR_ID_TOKEN_EXISTS, HTTPStatus.BAD_REQUEST
+
+        # create and save user
+        user = UserModel(name, username, password, email, terms_and_conditions_checked, social_login)
+        user.save_to_db()
+
+        # create and save social sign in details for the user
+        social_sign_in_details = SocialSignInModel(user.id, social_sign_in_type, id_token, email, name)
+        social_sign_in_details.save_to_db()
+
+        return user
+
+    @staticmethod
+    def get_social_sign_in_details(user_id: int, social_sign_in_type: str):
+        """
+        Returns social sign in details of the user.
+
+        Arguments:
+            user_id: user_id whose details are to be fetched
+            social_sign_in_type: social sign in type whole details are to be fetched
+
+        Returns:
+            social sign in details of the user for the specificed type
+        """
+
+        social_sign_in_details = SocialSignInModel.get_social_sign_in_details(user_id, social_sign_in_type)
+        return social_sign_in_details
 
     @staticmethod
     @email_verification_required

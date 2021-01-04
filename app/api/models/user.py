@@ -16,6 +16,7 @@ def add_models_to_namespace(api_namespace):
         update_user_request_body_model.name
     ] = update_user_request_body_model
     api_namespace.models[login_request_body_model.name] = login_request_body_model
+    api_namespace.models[social_auth_body_model.name] = social_auth_body_model
     api_namespace.models[login_response_body_model.name] = login_response_body_model
     api_namespace.models[refresh_response_body_model.name] = refresh_response_body_model
     api_namespace.models[
@@ -121,8 +122,8 @@ register_user_api_model = Model(
     "User registration model",
     {
         "name": fields.String(required=True, description="User name"),
-        "username": fields.String(required=True, description="User username"),
-        "password": fields.String(required=True, description="User password"),
+        "username": fields.String(required=False, description="User username"),
+        "password": fields.String(required=False, description="User password"),
         "email": fields.String(required=True, description="User email"),
         "terms_and_conditions_checked": fields.Boolean(
             required=True, description="User check Terms and Conditions value"
@@ -154,6 +155,16 @@ login_request_body_model = Model(
     },
 )
 
+social_auth_body_model = Model(
+    "Social sign-in authentication data model",
+    {
+        "id_token": fields.String(required=True, description="User's idToken given by Google auth"),
+        "name": fields.String(required=True, description="User's name given by Google auth"),
+        "email": fields.String(required=True, description="User's email given by Google auth"),
+    },
+)
+
+# TODO: Remove 'expiry' after the android app refactoring.
 login_response_body_model = Model(
     "Login response data model",
     {
